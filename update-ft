@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+
+import sqlite3
+from os.path import expanduser
+
+db_name = expanduser('~') + '/.ftdb'
+
+def main():
+    conn = sqlite3.connect(db_name)
+    c = conn.cursor()
+
+    # Create tags table if it doesn't exist.
+    print("Creating tags table...")
+    try:
+        c.execute('''CREATE TABLE tags (tag TEXT NOT NULL, filename TEXT NOT NULL, PRIMARY KEY (tag, filename))''')
+    except:
+        print("  Table already exists; nothing to do.")
+
+    conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    main()
+
+### Local Variables:
+### mode: python
+### End:
+    

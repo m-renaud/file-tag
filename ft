@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+
+"""
+  Utility for tagging files for easy querying.
+
+  Dependencies: pip, sh
+
+  @author Matt Renaud <mrenaud92>
+
+"""
+
+import subprocess
+from subprocess import DEVNULL
+from os.path import expanduser, abspath
+from sh import getfattr, setfattr, pwd
+import sys
+import sqlite3
+
+usage = '''Usage: ft [OPTION]... [TAGS]...
+
+  find (<query> | --all)
+      Find all files with the given tags, or all files if no tags are given.
+      Intersection is the default operator between terms.
+      Union can be specified with "or".
+      Difference is accomplished with a minus sign before the tag.
+        Example: ft find a b or c d -e
+
+  add <filename> <tags> 
+      Add all tags to filename.
+        Example: ft add foo.cxx ref cxx boost spirit
+
+  rm <filename> (<tags> | --all)
+      Removes all tags from filename.
+        Example: ft rm foo.cxx spirit
+
+  list <filename>...
+      Lists all tags for all filenames given.
+        Example: ft list *
+'''
+
+db_name = expanduser('~') + '/.ftdb'
+
+def is_tagged(filename):
+    """Return True if filename is tagged, False otherwise."""
+    return not subprocess.call(["getfattr", "-n", "user.tags", filename], stdout=DEVNULL, stderr=DEVNULL)
+
+
+def get_tags(filename):
+    """Retrieve the list of tags associated with a file."""
+
+    if is_tagged(filename):
+        return getfattr('-n', 'user.tags', filename).split('"')[1].split()
+    else:
+        return []
+
+
+def find(tags):
+    """Find all files that are tagged with 'tags', or all if '--all' is specified."""
+    
+    # If no tags, show everything.
+    if len(tags) == 0 or tags[0] == "--all":
+        query = "SELECT distinct filename from tags"
+    # Else, build a query (there's probably a better way to do this).
+    else:
+        union_count = 0
+        query = "SELECT filename from tags WHERE tag = '" + tags[0] +"'"
+        set_op = " INTERSECT "
+        for tag in tags[1:]:
+            if tag == "or":
+                union_count = union_count + 1
+                set_op = " UNION SELECT filename from ("
+            elif tag[0] == "-":
+                query += " EXCEPT SELECT filename from tags WHERE tag = '" + tag[1:] + "'"
+            else:
+                query += set_op + "SELECT filename from tags WHERE tag = '" + tag + "'"
+                set_op = " INTERSECT "
+        query += ')'*union_count
+        
+    print("Query: " + query)
+        
+    # Open a db connection.
+    conn = sqlite3.connect(db_name)
+    c = conn.cursor()
+
+    # Execute the query and display the results.
+    for row in c.execute(query):
+        print("%-40s " % row[0], get_tags(row[0]))
+
+        
+def show_tags(files):
+    """Display the tags for each file in files."""
+
+    for filename in files:
+        if is_tagged(filename):
+            print(filename, get_tags(filename))
+            
+
+def add_tags(filename, tags):
+    """Add tags to filename"""
+
+    # Get the list of new tags. old tags union new tags
+    tag_list = set(get_tags(filename)).union(tags)
+    setfattr('-n', 'user.tags', '-v', ' '.join(tag_list), filename)
+
+    # Open a db connection.
+    conn = sqlite3.connect(db_name)
+    c = conn.cursor()
+
+    # Build a list of tag entries to be inserted into the db.
+    tag_db_entries = [(tag, filename) for tag in tag_list]
+
+    # Execute the query and commit the transaction.
+    c.executemany("INSERT OR IGNORE INTO tags VALUES(?,?)", tag_db_entries)
+    conn.commit()
+    conn.close()
+
+    
+def rm_tags(filename, tags):
+    """Remove tags from filename"""
+
+    if tags[0] == "--all":
+        tags = get_tags(filename)
+
+    new_tags = set(get_tags(filename)).difference(tags)
+    try:
+        if len(new_tags) == 0:
+            setfattr('-x', 'user.tags', filename)
+        else:
+            setfattr('-n', 'user.tags', '-v', ' '.join(new_tags), filename)
+    except:
+        pass
+
+    # Open a db connection.
+    conn = sqlite3.connect(db_name)
+    c = conn.cursor()
+
+    # Build a list of tag entries to be removed from the db.
+    tag_db_entries = [(tag, filename) for tag in tags]
+
+    # Execute the query and commit the transaction.
+    c.executemany("DELETE FROM tags where tag = ? AND filename = ?", tag_db_entries)
+    conn.commit()
+    conn.close()
+
+    
+def main(args):
+    if args[0] == "find":
+        find(args[1:])
+    elif args[0] == "add":
+        add_tags(abspath(args[1]), args[2:])
+    elif args[0] == "rm":
+        rm_tags(abspath(args[1]), args[2:])
+    elif args[0] in ("list", "show"):
+        show_tags([abspath(filename) for filename in args[1:]])
+    else:
+        print(usage)
+
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        if len(sys.argv) == 1 or sys.args[1] in ('-h', '--help', 'help'):
+            print(usage)
+            sys.exit(1)
+    else:
+        main(sys.argv[1:])
+
+### Local Variables:
+### mode: python
+### End:
